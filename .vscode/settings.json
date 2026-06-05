@@ -1,0 +1,6 @@
+{
+  "python.defaultInterpreterPath": "python3",
+  "code-runner.executorMap": {
+    "python": "PYTHONPATH=/Users/bora/Documents/GitHub/ai-strategy-arena/backend python3 -u"
+  }
+}

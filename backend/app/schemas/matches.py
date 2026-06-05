@@ -1,5 +1,6 @@
-from pydantic import BaseModel
 from typing import List
+
+from pydantic import BaseModel, ConfigDict
 
 class CreateMoveIn(BaseModel):
     turn_number: int
@@ -16,13 +17,12 @@ class CreateMatchRequest(BaseModel):
     moves: List[CreateMoveIn] = []
 
 class ReplayMoveOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     turn_number: int
     player: str
     move_data: str
     explanation: str | None = None
-
-    class Config:
-        from_attributes = True
 
 class MatchOut(BaseModel):
     id: int

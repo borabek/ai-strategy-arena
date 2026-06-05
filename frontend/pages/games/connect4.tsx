@@ -1,10 +1,15 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import SectionTitle from "../../components/SectionTitle";
 import { apiRequest } from "../../lib/api";
 
 const ROWS = 6;
 const COLS = 7;
+const AI_THINK_MS = 850;
+const DROP_ANIMATION_MS = 650;
+
+type GamePhase = "human" | "thinking" | "animating" | "ended";
+type LastMove = { row: number; col: number; player: number } | null;
 
 function createBoard() {
   return Array.from({ length: ROWS }, () => Array(COLS).fill(0));
@@ -15,7 +20,7 @@ function dropPiece(board: number[][], col: number, piece: number) {
   for (let row = ROWS - 1; row >= 0; row--) {
     if (copy[row][col] === 0) {
       copy[row][col] = piece;
-      return copy;
+      return { board: copy, row };
     }
   }
   return null;
@@ -64,14 +69,14 @@ function aiMove(board: number[][]) {
 
   for (const col of legal) {
     const next = dropPiece(board, col, 2);
-    if (next && hasWinner(next, 2)) {
+    if (next && hasWinner(next.board, 2)) {
       return { col, explanation: `AI chose column ${col} to complete a four-in-a-row.` };
     }
   }
 
   for (const col of legal) {
     const next = dropPiece(board, col, 1);
-    if (next && hasWinner(next, 1)) {
+    if (next && hasWinner(next.board, 1)) {
       return { col, explanation: `AI chose column ${col} to block your immediate threat.` };
     }
   }
@@ -86,6 +91,20 @@ export default function Connect4Page() {
   const [message, setMessage] = useState("Your turn");
   const [moves, setMoves] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
+  const [phase, setPhase] = useState<GamePhase>("human");
+  const [lastMove, setLastMove] = useState<LastMove>(null);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    return () => {
+      timers.current.forEach(clearTimeout);
+    };
+  }, []);
+
+  function schedule(callback: () => void, delay: number) {
+    const timer = setTimeout(callback, delay);
+    timers.current.push(timer);
+  }
 
   async function saveMatch(result: string, finalMoves: any[]) {
     setSaving(true);
@@ -110,8 +129,12 @@ export default function Connect4Page() {
   }
 
   function handleColumn(col: number) {
-    const humanBoard = dropPiece(board, col, 1);
-    if (!humanBoard) return;
+    if (phase !== "human") return;
+
+    const humanDrop = dropPiece(board, col, 1);
+    if (!humanDrop) return;
+
+    const humanBoard = humanDrop.board;
 
     const humanMoves = [
       ...moves,
@@ -123,24 +146,30 @@ export default function Connect4Page() {
       }
     ];
 
+    setBoard(humanBoard);
+    setLastMove({ row: humanDrop.row, col, player: 1 });
+    setMoves(humanMoves);
+
     if (hasWinner(humanBoard, 1)) {
-      setBoard(humanBoard);
-      setMoves(humanMoves);
+      setPhase("ended");
       setMessage("You win");
       saveMatch("win", humanMoves);
       return;
     }
 
     if (isDraw(humanBoard)) {
-      setBoard(humanBoard);
-      setMoves(humanMoves);
+      setPhase("ended");
       setMessage("Draw game");
       saveMatch("draw", humanMoves);
       return;
     }
 
+    setPhase("thinking");
+    setMessage("AI is thinking...");
+
     const ai = aiMove(humanBoard);
-    const aiBoard = dropPiece(humanBoard, ai.col, 2)!;
+    const aiDrop = dropPiece(humanBoard, ai.col, 2)!;
+    const aiBoard = aiDrop.board;
     const finalMoves = [
       ...humanMoves,
       {
@@ -151,27 +180,41 @@ export default function Connect4Page() {
       }
     ];
 
-    setBoard(aiBoard);
-    setMoves(finalMoves);
+    schedule(() => {
+      setPhase("animating");
+      setMessage(`AI drops into column ${ai.col}...`);
+      setBoard(aiBoard);
+      setLastMove({ row: aiDrop.row, col: ai.col, player: 2 });
+      setMoves(finalMoves);
 
-    if (hasWinner(aiBoard, 2)) {
-      setMessage("AI wins");
-      saveMatch("loss", finalMoves);
-      return;
-    }
+      schedule(() => {
+        if (hasWinner(aiBoard, 2)) {
+          setPhase("ended");
+          setMessage("AI wins");
+          saveMatch("loss", finalMoves);
+          return;
+        }
 
-    if (isDraw(aiBoard)) {
-      setMessage("Draw game");
-      saveMatch("draw", finalMoves);
-      return;
-    }
+        if (isDraw(aiBoard)) {
+          setPhase("ended");
+          setMessage("Draw game");
+          saveMatch("draw", finalMoves);
+          return;
+        }
 
-    setMessage(ai.explanation);
+        setPhase("human");
+        setMessage(ai.explanation);
+      }, DROP_ANIMATION_MS);
+    }, AI_THINK_MS);
   }
 
   function resetGame() {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
     setBoard(createBoard());
     setMoves([]);
+    setLastMove(null);
+    setPhase("human");
     setMessage("Your turn");
   }
 
@@ -185,7 +228,12 @@ export default function Connect4Page() {
         <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
           <div className="mb-4 grid grid-cols-7 gap-2">
             {Array.from({ length: 7 }).map((_, col) => (
-              <button key={col} onClick={() => handleColumn(col)} className="rounded-lg bg-indigo-600 px-2 py-3 text-sm font-semibold">
+              <button
+                key={col}
+                onClick={() => handleColumn(col)}
+                disabled={phase !== "human" || board[0][col] !== 0}
+                className="rounded-lg bg-indigo-600 px-2 py-3 text-sm font-semibold transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              >
                 Drop {col}
               </button>
             ))}
@@ -195,8 +243,10 @@ export default function Connect4Page() {
             {board.flatMap((row, rowIndex) =>
               row.map((cell, colIndex) => (
                 <div key={`${rowIndex}-${colIndex}`} className="flex h-14 items-center justify-center rounded-full bg-slate-950">
-                  <div className={`h-10 w-10 rounded-full ${
+                  <div className={`h-10 w-10 rounded-full shadow-lg transition-colors ${
                     cell === 0 ? "bg-slate-700" : cell === 1 ? "bg-amber-400" : "bg-rose-500"
+                  } ${
+                    lastMove?.row === rowIndex && lastMove?.col === colIndex ? "connect4-piece-drop" : ""
                   }`} />
                 </div>
               ))
